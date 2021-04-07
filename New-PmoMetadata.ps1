@@ -250,16 +250,23 @@ foreach ($group in $journalGroups)
         $w.WriteEndElement() # </Document>
         foreach ($document in $xml.JournalExport.PatientData.Document)
         {
-            $w.WriteStartElement('Document')
-            $attachmentName = GenerateAttachmentName $document.DocAttachment.AttachmentName
-            $w.WriteElementString('AttachmentName', $attachmentName)
-            $w.WriteStartElement('Attachment')
-            $w.WriteStartElement('FileName')
-            $w.WriteAttributeString('Type', 'bilaga')
-            $w.WriteString($journalRelativePath + '/' + $document.DocAttachment.Attachment.FileName.Replace('\', '/'))
-            $w.WriteEndElement() # </FileName>
-            $w.WriteEndElement() # </Attachment>
-            $w.WriteEndElement() # </Document>
+            if ($document.DocAttachment) 
+            {
+                $w.WriteStartElement('Document')
+                $attachmentName = GenerateAttachmentName $document.DocAttachment.AttachmentName
+                $w.WriteElementString('AttachmentName', $attachmentName)
+                $w.WriteStartElement('Attachment')
+                $w.WriteStartElement('FileName')
+                $w.WriteAttributeString('Type', 'bilaga')
+                $w.WriteString($journalRelativePath + '/' + $document.DocAttachment.Attachment.FileName.Replace('\', '/'))
+                $w.WriteEndElement() # </FileName>
+                $w.WriteEndElement() # </Attachment>
+                $w.WriteEndElement() # </Document>
+            }
+            else
+            {
+                Write-Warning "Journal $($journal.Path) is containing information about an attachment that does not exist"
+            }
         }
         $w.WriteEndElement() # </patient>
     }
