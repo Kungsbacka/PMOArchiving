@@ -8,9 +8,9 @@
     [parameter(mandatory=$true)]
     [string]
     $MetadataPath,
-    # Skip MD5 validation of files in export (FileList.txt and FileListMD5.txt)
+    # Skip hash (SHA1) validation of files in export (FileList.sha1)
     [switch]
-    $SkipMd5validation,
+    $SkipFileHashvalidation,
     # Skip validating if all files are present in export and that the files listed
     # in FileList.txt match the files on disk.
     [switch]
@@ -77,10 +77,10 @@ $ExportPath, $MetadataPath | ForEach-Object {
 $ExportPath = (Resolve-Path $ExportPath).ToString()
 $MetadataPath = (Resolve-Path $MetadataPath).ToString()
 
-# Find all FileList.txt files under the export path.
-Write-Progress -Activity 'Finding all FileList.txt files' -Status 'Searching...'
-$fileListFiles = Get-ChildItem -Path $ExportPath -Filter 'FileList.txt' -File -Recurse
-Write-Progress -Activity 'Finding all FileList.txt files' -Completed
+# Find all FileList.sha1 files under the export path.
+Write-Progress -Activity 'Finding all FileList.sha1 files' -Status 'Searching...'
+$fileListFiles = Get-ChildItem -Path $ExportPath -Filter 'FileList.sha1' -File -Recurse
+Write-Progress -Activity 'Finding all FileList.sha1 files' -Completed
 $index = 1
 $allFiles = New-Object -TypeName 'System.Collections.ArrayList'
 $JournalFiles = New-Object -TypeName 'System.Collections.ArrayList'
@@ -88,32 +88,27 @@ foreach ($fileList in $fileListFiles)
 {   
     Write-Progress -Activity 'Reading file list' -Status $fileList.FullName -PercentComplete ($index++ / $fileListFiles.Count * 100)
     $sourcePath = Split-Path -Path $fileList.FullName
-    Get-Content "$sourcePath\FileListMD5.txt" | ForEach-Object {
-        $parts = $_ -split '='
-        $correctMd5 = $parts[1].Trim()
-        $actualMd5 = (Get-FileHash -Path "$sourcePath\FileList.txt" -Algorithm MD5).Hash
-        if ($correctMd5 -ne $actualMd5) {
-            Write-Error "Hashes do not match. File may be altered or corrupt: $sourcePath\FileList.txt"
-            exit
-        }
-    }
-    $fileList = Get-Content "$sourcePath\FileList.txt"
+    $fileList = Get-Content $fileList.FullName
     $filesInList = New-Object -TypeName 'System.Collections.ArrayList'
     if (-not $SkipFileValidation)
     {
         $filesOnDisk = Get-ChildItem -Path $sourcePath -Recurse -File |
-            Where-Object Name -NotIn @('FileList.txt','FileListMD5.txt','JournalExport.xsd','PatientLog.xsd','CBMKeywordTextType.xsd','DataOriginType.xsd') |
+            Where-Object Name -NotIn @('JournalExport.xsd','PatientLog.xsd','CBMKeywordTextType.xsd','DataOriginType.xsd','EHTExport.xsd','ExportKey.txt','FileList.sha1') |
             ForEach-Object {$_.FullName.Substring($sourcePath.Length + 1)}
     }
     foreach ($item in $fileList) {
-        $parts = $item -split '='
-        $fileName = $parts[0].Trim()
+        $parts = $item -split ' '
+        $fileName = $parts[1].Trim()
+        if ($fileName -like 'Logs\*')
+        {
+            continue
+        }
         [void]$filesInList.Add($fileName)
         $path = Join-Path -Path $sourcePath -ChildPath $fileName
-        $md5 = $parts[1].Trim()
+        $sha1 = $parts[0].Trim()
         [void]$allFiles.Add([pscustomobject]@{
             Path = $path
-            CorrectMd5 = $md5
+            CorrectSha1 = $sha1
         })
         if ($Special)
         {
@@ -150,20 +145,20 @@ foreach ($fileList in $fileListFiles)
 }
 Write-Progress -Activity 'Reading file list' -Completed
 
-if (-not $SkipMd5Validation)
+if (-not $SkipFileHashValidation)
 {
     $index = 1
     foreach ($file in $allFiles)
     {
-        Write-Progress -Activity 'Checking MD5' -Status $file.Path -PercentComplete ($index++ / $allFiles.Count * 100)
-        $actualMd5 = (Get-FileHash -Path $file.Path -Algorithm MD5).Hash
-        if ($file.CorrectMd5 -ne $actualMd5)
+        Write-Progress -Activity 'Checking file hash' -Status $file.Path -PercentComplete ($index++ / $allFiles.Count * 100)
+        $actualSha1 = (Get-FileHash -Path $file.Path -Algorithm SHA1).Hash
+        if ($file.CorrectSha1 -ne $actualSha1)
         {
             Write-Error "Hashes do not match. File may be altered or corrupt: $($file.Path)"
             exit
         }
     }
-    Write-Progress -Activity 'Checking MD5' -Completed
+    Write-Progress -Activity 'Checking file hash' -Completed
 }
 
 function CreateXmlTextWriter([string]$path)
