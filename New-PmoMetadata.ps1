@@ -77,89 +77,69 @@ $ExportPath, $MetadataPath | ForEach-Object {
 $ExportPath = (Resolve-Path $ExportPath).ToString()
 $MetadataPath = (Resolve-Path $MetadataPath).ToString()
 
-# Find all FileList.sha1 files under the export path.
-Write-Progress -Activity 'Finding all FileList.sha1 files' -Status 'Searching...'
-$fileListFiles = Get-ChildItem -Path $ExportPath -Filter 'FileList.sha1' -File -Recurse
-Write-Progress -Activity 'Finding all FileList.sha1 files' -Completed
+# Find FileList.sha1 files under the export path.
+$fileListContents = Get-Content -Path (Join-Path $ExportPath 'FileList.sha1') | Where-Object {$_ -notlike '* Logs\*'}
 $index = 1
-$allFiles = New-Object -TypeName 'System.Collections.ArrayList'
 $JournalFiles = New-Object -TypeName 'System.Collections.ArrayList'
-foreach ($fileList in $fileListFiles)
-{   
-    Write-Progress -Activity 'Reading file list' -Status $fileList.FullName -PercentComplete ($index++ / $fileListFiles.Count * 100)
-    $sourcePath = Split-Path -Path $fileList.FullName
-    $fileList = Get-Content $fileList.FullName
-    $filesInList = New-Object -TypeName 'System.Collections.ArrayList'
-    if (-not $SkipFileValidation)
-    {
-        $filesOnDisk = Get-ChildItem -Path $sourcePath -Recurse -File |
-            Where-Object Name -NotIn @('JournalExport.xsd','PatientLog.xsd','CBMKeywordTextType.xsd','DataOriginType.xsd','EHTExport.xsd','ExportKey.txt','FileList.sha1') |
-            ForEach-Object {$_.FullName.Substring($sourcePath.Length + 1)}
-    }
-    foreach ($item in $fileList) {
-        $parts = $item -split ' '
-        $fileName = $parts[1].Trim()
-        if ($fileName -like 'Logs\*')
-        {
-            continue
-        }
-        [void]$filesInList.Add($fileName)
-        $path = Join-Path -Path $sourcePath -ChildPath $fileName
-        $sha1 = $parts[0].Trim()
-        [void]$allFiles.Add([pscustomobject]@{
-            Path = $path
-            CorrectSha1 = $sha1
-        })
-        if ($Special)
-        {
-            # {UUID}_Jrnl1.xml
-            $pattern = '{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}_Jrnl([\d]+).xml$'
-        }
-        else
-        {
-            $pattern = '\d{12}_Jrnl([\d]+).xml$'
-        }
-        if ($fileName -match $pattern)
-        {
-            $type = $Matches[1]
-            if (-not $journalTypes.ContainsKey($type))
-            {
-                Write-Error "Unknown journal type: $path"
-                exit
-            }
-            [void]$JournalFiles.Add([pscustomobject]@{
-                Path = $path
-                JournalType = $type
-            })
-        }
-    }
-    if (-not $SkipFileValidation)
-    {
-        $diff = Compare-Object -ReferenceObject $filesInList -DifferenceObject $filesOnDisk
-        if ($diff.Count -ne 0)
-        {
-            Write-Error "Files in list and on disk does not match: $sourcePath"
-            exit
-        }
-    }
+$activity = 'Reading FileList.sha1'
+if (-not $SkipFileValidation) {
+    $activity += ' and checking that the file exists'
 }
-Write-Progress -Activity 'Reading file list' -Completed
+if (-not $SkipFileHashvalidation) {
+    $activity += ' and hashes match'
+}
 
-if (-not $SkipFileHashValidation)
+foreach ($row in $fileListContents)
 {
-    $index = 1
-    foreach ($file in $allFiles)
+    $expectedHash = $row.Substring(0, 40)
+    $relativePath = $row.Substring(41)
+
+    if ($index++ % 30 -eq 0) {
+        Write-Progress -Activity $activity -Status $relativePath -PercentComplete ($index / $fileListContents.Count * 100)
+    }
+
+    $fullPath = Join-Path $ExportPath $relativePath
+
+    if (-not $SkipFileValidation)
     {
-        Write-Progress -Activity 'Checking file hash' -Status $file.Path -PercentComplete ($index++ / $allFiles.Count * 100)
-        $actualSha1 = (Get-FileHash -Path $file.Path -Algorithm SHA1).Hash
-        if ($file.CorrectSha1 -ne $actualSha1)
-        {
-            Write-Error "Hashes do not match. File may be altered or corrupt: $($file.Path)"
+        if (-not (Test-Path $fullPath)) {
+            Write-Error "File from FileList.sha1 does not exist on disk: $fullPath"
             exit
         }
     }
-    Write-Progress -Activity 'Checking file hash' -Completed
+    if (-not $SkipFileHashvalidation) {
+        $actualHash = (Get-FileHash -Path $fullPath -Algorithm SHA1).Hash
+        if ($expectedHash -ne $actualHash)
+        {
+            Write-Error "Hash do not match. File may be altered or corrupt: $fullPath"
+            exit
+        }
+    }
+    $fileName = Split-Path $fullPath -Leaf
+    if ($Special)
+    {
+        # {UUID}_Jrnl1.xml
+        $pattern = '{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}_Jrnl([\d]+).xml$'
+    }
+    else
+    {
+        $pattern = '\d{12}_Jrnl([\d]+).xml$'
+    }
+    if ($fileName -match $pattern)
+    {
+        $type = $Matches[1]
+        if (-not $journalTypes.ContainsKey($type))
+        {
+            Write-Error "Unknown journal type: $fullPath"
+            exit
+        }
+        [void]$JournalFiles.Add([pscustomobject]@{
+            Path = $fullPath
+            JournalType = $type
+        })
+    }
 }
+Write-Progress -Activity $activity -Completed
 
 function CreateXmlTextWriter([string]$path)
 {
@@ -260,7 +240,7 @@ foreach ($group in $journalGroups)
             }
             else
             {
-                Write-Warning "Journal $($journal.Path) is containing information about an attachment that does not exist"
+                Write-Warning "Journal $($journal.Path) contains information about an attachment that does not exist: $($document.DocName)"
             }
         }
         $w.WriteEndElement() # </patient>
